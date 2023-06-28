@@ -22,8 +22,9 @@ hashtable_t *make_hashtable(unsigned long size) {
 }
 
 void ht_put(hashtable_t *ht, char *key, void *val) {
-  unsigned int idx = hash(key) % ht->size;
+  
   //to check existing, scale the bucket until "key" reached
+  unsigned int idx = hash(key) % ht->size;
   bucket_t *b = ht->buckets[idx];
   while(b){
     //check for key match, if so, set val and return
@@ -33,7 +34,7 @@ void ht_put(hashtable_t *ht, char *key, void *val) {
       free(b->val); 
       free(b->key);
       b->key = key;
-      b->val = val;       
+      b->val = val;
       return;
     }
     b = b->next;
@@ -73,31 +74,6 @@ void ht_iter(hashtable_t *ht, int (*f)(char *, void *)) {
   }
 }
 
-void free_hashtable(hashtable_t *ht) {
-  //free each bucket and its contents; loop over size worht buckets
-  for (int i = 0; i < ht->size; i++){
-    if (ht->buckets[i] != NULL) {
-      bucket_t * b = ht->buckets[i];
-      bucket_t * b_next;
-      while(b != NULL){
-        //scale the linked list, free prior ones.
-        //remove key/val ptr ref, then b itself...
-        b_next = b->next;
-        free(b->key);
-        free(b->val);
-        free(b);
-        b = b_next;
-      }
-      //null out the bucket ref... not sure if needed but we'll do it.
-      ht->buckets[i] = NULL;
-    }
-  }
-  
-  //free the memory of the allocated bucket space, then ht
-  free(ht->buckets);
-  free(ht);
-}
-
 void  ht_del(hashtable_t *ht, char *key) {
   //lookup the key, if exists, free it and update links.
   unsigned int idx = hash(key) % ht->size;
@@ -114,9 +90,7 @@ void  ht_del(hashtable_t *ht, char *key) {
       }
       //remove all pointers, then free bucket...
       b->next = NULL;
-      free(b->key);
-      free(b->val);
-      free(b);
+      free_bucket(b);
       return;
     }
     priorb = b;
@@ -156,4 +130,34 @@ void  ht_rehash(hashtable_t *ht, unsigned long newsize) {
     free(ht->buckets);
     ht->buckets = newbuckets;
     ht->size = newsize;
+}
+
+void free_bucket(bucket_t *b) {
+  //remove key/val ptr ref, then b itself...
+  free(b->key);
+  free(b->val);
+  //b.next is a pointer to the next bucket, which may still be in use.
+  free(b);
+}
+
+void free_hashtable(hashtable_t *ht) {
+  //free each bucket and its contents; loop over size worht buckets
+  for (int i = 0; i < ht->size; i++){
+    if (ht->buckets[i] != NULL) {
+      bucket_t * b = ht->buckets[i];
+      bucket_t * b_next;
+      while(b != NULL){
+        //scale the linked list, free prior ones.
+        b_next = b->next;
+        free_bucket(b);
+        b = b_next;
+      }
+      //null out the bucket ref... not sure if needed but we'll do it.
+      ht->buckets[i] = NULL;
+    }
+  }
+  
+  //free the memory of the allocated bucket space, then ht
+  free(ht->buckets);
+  free(ht);
 }
