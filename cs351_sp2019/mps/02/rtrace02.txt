@@ -1,0 +1,22 @@
+Creating hashtable of size 10
+Inserting one => two
+Inserting three => four
+Inserting five => six
+Inserting seven => eight
+Inserting nine => ten
+Printing hashtable info
+Num buckets = 5
+Max chain length = 3
+Avg chain length = 1.67
+Inserting one => eleven
+Inserting five => twelve
+Printing hashtable info
+Num buckets = 5
+Max chain length = 3
+Avg chain length = 1.67
+Looking up key one
+Found value eleven
+Looking up key three
+Found value four
+Looking up key five
+Found value twelve
