@@ -1,3 +1,8 @@
+/**
+  This file was supplied by IIT for the purpose of testing our hash implementation with 
+  a given trace##.txt as its driver.
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
