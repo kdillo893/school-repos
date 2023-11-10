@@ -94,6 +94,9 @@ int main(int argc, char **argv) {
    * on the pipe connected to stdout) */
   dup2(1, 2);
 
+
+  printf("Main Shell Process: pid=%d, group=%d\n", getpid(), getpgrp());
+
   /* Parse the command line */
   while ((c = getopt(argc, argv, "hvp")) != EOF) {
     switch (c) {
@@ -197,7 +200,6 @@ void eval(char *cmdline) {
     return;
   }
 
-  // not a built-in...
   // Create child process for job; this has group ID for killing,
   pid_t npid;
   if ((npid = fork()) == 0) {
@@ -205,10 +207,11 @@ void eval(char *cmdline) {
     setpgrp();
 
     // b.) execute the command of the child
-    execve(argv[0], argv, environ);
-
-    // if failed, explain why, delete
-    exit(0);
+    if (execve(argv[0], argv, environ) < 0) {
+      //failing execution.
+      printf("%s: error executing command. \n", argv[0]);
+      exit(0);
+    }
   }
   addjob(jobs, npid, bg ? BG : FG, cmdline);
 
@@ -281,12 +284,13 @@ int parseline(const char *cmdline, char **argv) {
 int builtin_cmd(char **argv) {
   char *command = argv[0];
   if (strcmp(command, "quit") == 0) {
+    
     // delete all children and jobs, then exit.
     initjobs(jobs);
     kill(-getpid(), SIGKILL);
     exit(0);
   } else if (strcmp(command, "jobs") == 0) {
-    // just making a child do it... idk
+
     pid_t jobspid;
     if ((jobspid = fork()) == 0) {
       listjobs(jobs);
@@ -321,9 +325,10 @@ void do_bgfg(char **argv) {
     argid = atoi(argv[1]);
     job = getjobpid(jobs, argid);
   }
+
   if (strcmp(command, "bg") == 0) {
     if (job != NULL) {
-      // resume it with sigcont
+      // reume it with sigcont
       if (kill(argid, SIGCONT) < 0) {
         // do something if the return gives error...
       }
@@ -337,6 +342,7 @@ void do_bgfg(char **argv) {
       }
       job->state = FG;
     }
+
     // resumed, now wait b/c this is sent to foreground.
     waitfg(argid);
   }
@@ -346,26 +352,43 @@ void do_bgfg(char **argv) {
  * waitfg - Block until process pid is no longer the foreground process
  */
 void waitfg(pid_t pid) {
-  // known child pid; wait on its state to change; if exit, stopped,
-  // interrupted, etc
   int status;
   while (1) {
+
+    //wait for a process, we will see the status
     if (waitpid(pid, &status, WUNTRACED) == -1) {
       // child gives us an error in the foreground... idk what to do.
-    }
-
-    // check statuses...
-    if (WIFEXITED(status)) {
+      // probably "child error", delete it then go..
+      printf("error: pid=%d, status=%d\n", pid, status);
+      // the child terminated? remove the job and go fg
+      deletejob(jobs, pid);
       break;
     }
+
+    // exit, clean break. no need to do anything
+    if (WIFEXITED(status)) {
+      printf("ExitStatus: %d\n", WEXITSTATUS(status));
+
+      deletejob(jobs, pid);
+      break;
+    }
+
     if (WIFSIGNALED(status)) {
-      printf("signaled");
+      psignal(WTERMSIG(status), "Exit signal");
       int sigused = WTERMSIG(status);
       if (sigused == SIGSTOP || sigused == SIGTSTP) {
+        kill(pid, SIGSTOP);
+        printf("signaled stop from child\n");
+        //stoppage to the child, label the job, etc.
+        struct job_t *job = getjobpid(jobs, pid);
+        job->state = ST;
+        
         // child is being stopped, I can resume.
         break;
       } else if (sigused == SIGINT) {
         // child is being interrupted, I can resume.
+        kill(pid, SIGKILL);
+        deletejob(jobs, pid);
         break;
       } else if (sigused == SIGCONT) {
         // this isn't an important signal...
@@ -373,8 +396,13 @@ void waitfg(pid_t pid) {
       }
     }
 
+    
     if (WIFSTOPPED(status)) {
-      ///......idk...
+      //forward signal to child, update job status, resume shell
+      kill(pid, SIGSTOP);
+      struct job_t *job = getjobpid(jobs, pid);
+      job->state = ST;
+      break;
     }
   }
   return;
@@ -392,10 +420,23 @@ void waitfg(pid_t pid) {
  *     currently running children to terminate.
  */
 void sigchld_handler(int sig) {
+  // printf("SIGCHILD; mypid=%d, parentpid=%d, mygroup=%d\n", getpid(),
+  // getppid(), getgid());
+  // printf("Signal: %d\n", sig);
+  
+  int status;
   // pt1: reaping the zombie child
-  //
+  // pid_t child_pid = wait(&status);
+  // printf("childpid?: %d\n", child_pid);
+  //waiting on the children in the group?
+  pid_t child_pid = waitpid(-getpid(), &status, 0);
+  printf("child_pid?: %d\n", child_pid);
+  
   // pt2: clearing jobs of a reaped process
-  //
+  if (child_pid >=0) {
+    deletejob(jobs, child_pid);
+  }
+
   // pt3 restoring control.
   return;
 }
