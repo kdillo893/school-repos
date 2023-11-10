@@ -14,6 +14,9 @@ all: $(FILES)
 # Regression tests
 ##################
 
+NUMBERS = 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16
+testall: $(foreach num, $(NUMBERS), test$(num) )
+
 # Run tests using the student's shell program
 test01:
 	$(DRIVER) -t trace01.txt -s $(TSH) -a $(TSHARGS)
@@ -47,6 +50,8 @@ test15:
 	$(DRIVER) -t trace15.txt -s $(TSH) -a $(TSHARGS)
 test16:
 	$(DRIVER) -t trace16.txt -s $(TSH) -a $(TSHARGS)
+
+# special tests for TAs to run on our stuff
 test17:
 	$(DRIVER) -t trace17.txt -s $(TSH) -a $(TSHARGS)
 test18:
@@ -55,6 +60,9 @@ test19:
 	$(DRIVER) -t trace19.txt -s $(TSH) -a $(TSHARGS)
 test20:
 	$(DRIVER) -t trace20.txt -s $(TSH) -a $(TSHARGS)
+
+RNUMBERS = 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16  
+rtestall: $(foreach num, $(RNUMBERS), rtest$(num) )
 
 # Run the tests using the reference shell program
 rtest01:
@@ -89,6 +97,7 @@ rtest15:
 	$(DRIVER) -t trace15.txt -s $(TSHREF) -a $(TSHARGS)
 rtest16:
 	$(DRIVER) -t trace16.txt -s $(TSHREF) -a $(TSHARGS)
+
 
 # clean up
 clean:

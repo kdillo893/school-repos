@@ -1,0 +1,81 @@
+./sdriver.pl -t trace01.txt -s ./tsh -a "-p"
+#
+# trace01.txt - Properly terminate on EOF.
+#
+./sdriver.pl -t trace02.txt -s ./tsh -a "-p"
+#
+# trace02.txt - Process builtin quit command.
+#
+./sdriver.pl -t trace03.txt -s ./tsh -a "-p"
+#
+# trace03.txt - Run a foreground job.
+#
+tsh> quit
+./sdriver.pl -t trace04.txt -s ./tsh -a "-p"
+#
+# trace04.txt - Run a background job.
+#
+tsh> ./myspin 1 &
+./sdriver.pl -t trace05.txt -s ./tsh -a "-p"
+#
+# trace05.txt - Process jobs builtin command.
+#
+tsh> ./myspin 2 &
+tsh> ./myspin 3 &
+tsh> jobs
+[1] (17455) Foreground /bin/echo -e tsh> ./myspin 2 \046
+[2] (17456) Running ./myspin 2 &
+[3] (17457) Foreground /bin/echo -e tsh> ./myspin 3 \046
+[4] (17458) Running ./myspin 3 &
+[5] (17459) Foreground /bin/echo tsh> jobs
+./sdriver.pl -t trace06.txt -s ./tsh -a "-p"
+#
+# trace06.txt - Forward SIGINT to foreground job.
+#
+tsh> ./myspin 4
+./sdriver.pl -t trace07.txt -s ./tsh -a "-p"
+#
+# trace07.txt - Forward SIGINT only to foreground job.
+#
+tsh> ./myspin 4 &
+tsh> ./myspin 5
+tsh> jobs
+[1] (17467) Foreground /bin/echo -e tsh> ./myspin 4 \046
+[2] (17468) Running ./myspin 4 &
+[3] (17469) Foreground /bin/echo -e tsh> ./myspin 5
+[4] (17470) Foreground ./myspin 5 
+[5] (17473) Foreground /bin/echo tsh> jobs
+./sdriver.pl -t trace08.txt -s ./tsh -a "-p"
+#
+# trace08.txt - Forward SIGTSTP only to foreground job.
+#
+tsh> ./myspin 4 &
+tsh> ./myspin 5
+tsh> jobs
+[1] (17477) Foreground /bin/echo -e tsh> ./myspin 4 \046
+[2] (17478) Running ./myspin 4 &
+[3] (17479) Foreground /bin/echo -e tsh> ./myspin 5
+[4] (17480) Foreground ./myspin 5 
+[5] (17483) Foreground /bin/echo tsh> jobs
+./sdriver.pl -t trace09.txt -s ./tsh -a "-p"
+#
+# trace09.txt - Process bg builtin command
+#
+tsh> ./myspin 4 &
+tsh> ./myspin 5
+tsh> jobs
+[1] (17487) Foreground /bin/echo -e tsh> ./myspin 4 \046
+[2] (17488) Running ./myspin 4 &
+[3] (17489) Foreground /bin/echo -e tsh> ./myspin 5
+[4] (17490) Foreground ./myspin 5 
+[5] (17535) Foreground /bin/echo tsh> jobs
+tsh> bg %2
+tsh> jobs
+[1] (17487) Foreground /bin/echo -e tsh> ./myspin 4 \046
+[2] (17488) Running ./myspin 4 &
+[3] (17489) Foreground /bin/echo -e tsh> ./myspin 5
+[4] (17490) Foreground ./myspin 5 
+[5] (17535) Foreground /bin/echo tsh> jobs
+[6] (17537) Foreground /bin/echo tsh> bg %2
+[7] (17538) Foreground /bin/echo tsh> jobs
+./sdriver.pl -t trace10.txt -s ./tsh -a "-p"
