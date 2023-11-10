@@ -31,8 +31,10 @@ void ht_put(hashtable_t *ht, char *key, void *val) {
   while (b) {
     if (strcmp(b->key, key) == 0) {
       // overwrite the val for the bucket on match and return 
-      // free b/c if i have an array value, this opens up more bytes
+      // free to open up space, that was used, then replace it. (next is primitive addr)
       free(b->val);
+      free(b->key);
+      b->key = key;
       b->val = val;
 
       return;
@@ -140,8 +142,6 @@ void free_bucket(bucket_t *b) {
   // remove key/val ptr ref, then b itself...
   free(b->key);
   free(b->val);
-  //null our next.
-  b->next = NULL;
   // b.next is a pointer to the next bucket, which may still be in use.
   free(b);
 }
