@@ -4,13 +4,19 @@
 typedef struct hashtable hashtable_t;
 typedef struct bucket bucket_t;
 
-/** Linked list with key/value pair */
+/**
+ * Linked list with key/value pair. 
+ * A bucket is start of a DS to describe key matches
+ **/
 struct bucket {
   char *key;
   void *val;
   bucket_t *next;
 };
 
+/**
+ * pointer to buckets array and size
+ */
 struct hashtable {
   unsigned long size;
   bucket_t **buckets;

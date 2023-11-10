@@ -1,10 +1,11 @@
+#include "hashtable.h"
 #include <stdlib.h>
 #include <string.h>
-#include "hashtable.h"
 
 /* Daniel J. Bernstein's "times 33" string hash function, from comp.lang.C;
    See https://groups.google.com/forum/#!topic/comp.lang.c/lSKWXiuNOAk */
 unsigned long hash(char *str) {
+
   unsigned long hash = 5381;
   int c;
 
@@ -15,6 +16,7 @@ unsigned long hash(char *str) {
 }
 
 hashtable_t *make_hashtable(unsigned long size) {
+
   hashtable_t *ht = malloc(sizeof(hashtable_t));
   ht->size = size;
   ht->buckets = calloc(sizeof(bucket_t *), size);
@@ -22,28 +24,30 @@ hashtable_t *make_hashtable(unsigned long size) {
 }
 
 void ht_put(hashtable_t *ht, char *key, void *val) {
-  
-  //to check existing, scale the bucket until "key" reached
+
+  // hash to bucket sizes, check the bucket for key match
   unsigned int idx = hash(key) % ht->size;
   bucket_t *b = ht->buckets[idx];
-  while(b){
-    //check for key match, if so, set val and return
-    if (strcmp(b->key, key) == 0){
-      //free pointers to val/key; then re-assign new ones 
-      //(for some reason overwrite failed)
-      free(b->val); 
-      free(b->key);
-      b->key = key;
+  while (b) {
+    if (strcmp(b->key, key) == 0) {
+      // overwrite the val for the bucket on match and return 
+      // free b/c if i have an array value, this opens up more bytes
+      free(b->val);
       b->val = val;
+
       return;
     }
+
+    // no match, go next in LList
     b = b->next;
   }
-  
-  //didn't return, so create new and add to list.
+
+  // didn't return, create new and add to list.
   b = malloc(sizeof(bucket_t));
   b->key = key;
   b->val = val;
+
+  // creating one points to old next (prepend LList)
   b->next = ht->buckets[idx];
   ht->buckets[idx] = b;
 }
@@ -61,103 +65,105 @@ void *ht_get(hashtable_t *ht, char *key) {
 }
 
 void ht_iter(hashtable_t *ht, int (*f)(char *, void *)) {
+
+  //does the order of iteration matter
   bucket_t *b;
   unsigned long i;
-  for (i=0; i<ht->size; i++) {
+  for (i = 0; i < ht->size; i++) {
     b = ht->buckets[i];
     while (b) {
       if (!f(b->key, b->val)) {
-        return ; // abort iteration
+        return; // abort iteration
       }
       b = b->next;
     }
   }
 }
 
-void  ht_del(hashtable_t *ht, char *key) {
-  //lookup the key, if exists, free it and update links.
+void ht_del(hashtable_t *ht, char *key) {
+  //complexity O(1) + O(b)... only bad if unbalanced hash or low buckets
+  
   unsigned int idx = hash(key) % ht->size;
   bucket_t *b = ht->buckets[idx];
   bucket_t *priorb = NULL;
-  while(b) {
+
+  while (b) {
+
     if (strcmp(b->key, key) == 0) {
-      //key match to this bucket, remove reference and free.
-      bucket_t *nextb = b->next;
-      if (priorb == NULL){
-        ht->buckets[idx] = nextb;
+      if (priorb == NULL) {
+        ht->buckets[idx] = b->next;
       } else {
-        priorb->next = nextb;
+        priorb->next = b->next;
       }
-      //remove all pointers, then free bucket...
-      b->next = NULL;
+
       free_bucket(b);
       return;
     }
+
+    //not found, go next
     priorb = b;
     b = b->next;
   }
 }
 
-void  ht_rehash(hashtable_t *ht, unsigned long newsize) {
-    //buckets == all the old stuff...
-    //different buckets array == new size with bucket allocs...
-    //loop buckets, for each b, eval key hash to new bucket,
-    //  ... point to that b in new buckets array... continue.
-    //after all b's are pointed to in new,....
-    //realloc buckets to the new size, newbuckets pointer on that...
-    
-    //new buckets array of new size within ht.
-    bucket_t** newbuckets = calloc(newsize, sizeof(bucket_t *));
-    
-    //iter over current set of linkedlist buckets,
-    //move bucket objects and replace next link.
-    for(int i=0; i < ht->size; i++){
-        bucket_t *b = ht->buckets[i];
-        while(b){
-            //for each b in this linkedlist,
-            //1. evaluate key hash with new size
-            //2. place in bucket similar to put, remove old next
-            //-- no need to keymatch, since all keys are diff.
-            unsigned int nidx = hash(b->key) % newsize;
-            bucket_t *bnext = b->next;
-            b->next = newbuckets[nidx];
-            newbuckets[nidx]=b;
-            b = bnext;
-        }
-    }
+void ht_rehash(hashtable_t *ht, unsigned long newsize) {
+  //currently this is using O(n) space, O(n) time to scale all
 
-    //fix pointer of newbuckets to ht->buckets after freeing it...
-    free(ht->buckets);
-    ht->buckets = newbuckets;
-    ht->size = newsize;
+  // new buckets array of new size within ht.
+  bucket_t **newbuckets = calloc(newsize, sizeof(bucket_t *));
+
+  for (int i = 0; i < ht->size; i++) {
+    bucket_t *b = ht->buckets[i];
+    while (b) {
+      // 1. evaluate the bucket's key hash with new size
+      unsigned int nidx = hash(b->key) % newsize;
+
+      // 2. save the "next bucket" for iteration purposes
+      bucket_t * nextb = b->next;
+
+      // 3. place "old bucket" in "new buckets" with prepend (no freeing b/c data maintained)
+      b->next = newbuckets[nidx];
+      newbuckets[nidx] = b;
+
+      // 4. put the "next bucket" from current hash table as "b"
+      b = nextb;
+    }
+  }
+
+  // fix pointer of newbuckets to ht->buckets after freeing it...
+  free(ht->buckets);
+  ht->buckets = newbuckets;
+  ht->size = newsize;
 }
 
 void free_bucket(bucket_t *b) {
-  //remove key/val ptr ref, then b itself...
+  // remove key/val ptr ref, then b itself...
   free(b->key);
   free(b->val);
-  //b.next is a pointer to the next bucket, which may still be in use.
+  //null our next.
+  b->next = NULL;
+  // b.next is a pointer to the next bucket, which may still be in use.
   free(b);
 }
 
 void free_hashtable(hashtable_t *ht) {
-  //free each bucket and its contents; loop over size worht buckets
-  for (int i = 0; i < ht->size; i++){
+  // free each bucket and its contents; loop over size worht buckets
+  for (int i = 0; i < ht->size; i++) {
     if (ht->buckets[i] != NULL) {
-      bucket_t * b = ht->buckets[i];
-      bucket_t * b_next;
-      while(b != NULL){
-        //scale the linked list, free prior ones.
+      bucket_t *b = ht->buckets[i];
+      bucket_t *b_next;
+      while (b != NULL) {
+        // scale the linked list, free prior ones.
         b_next = b->next;
         free_bucket(b);
         b = b_next;
       }
-      //null out the bucket ref... not sure if needed but we'll do it.
+      // null out the bucket ref... not sure if needed but we'll do it.
       ht->buckets[i] = NULL;
     }
   }
-  
-  //free the memory of the allocated bucket space, then ht
+
+  // free the memory of the allocated bucket space, then ht
   free(ht->buckets);
   free(ht);
 }

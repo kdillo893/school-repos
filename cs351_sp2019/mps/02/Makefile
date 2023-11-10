@@ -49,7 +49,7 @@ diff06: hashtable
 	@./hashtable trace06.txt | diff - rtrace06.txt
 
 leakcheck: hashtable
-	@valgrind --leak-check=full ./hashtable trace06.txt
+	@valgrind --leak-check=full -s --track-origins=yes ./hashtable trace06.txt --log-file="valgrind.log"
 
 clean:
-	rm -f $(OBJS) hashtable hashtable-demo hashtable-demo.o
+	rm -f $(OBJS) hashtable hashtable-demo hashtable-demo.o valgrind.log
