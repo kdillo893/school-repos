@@ -6,7 +6,7 @@ TSHREF = ./tshref
 TSHARGS = "-p"
 CC = gcc
 CFLAGS = -Wall -g
-FILES = $(TSH) ./myspin ./mysplit ./mystop ./myint
+FILES = $(TSH) ./myspin ./mysplit ./mystop ./myint testall.txt rtestall.txt
 
 all: $(FILES)
 
@@ -14,7 +14,7 @@ all: $(FILES)
 # Regression tests
 ##################
 
-NUMBERS = 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16
+NUMBERS = ${seq -s " " -w 1 16}
 testall: $(foreach num, $(NUMBERS), test$(num) )
 
 # Run tests using the student's shell program
