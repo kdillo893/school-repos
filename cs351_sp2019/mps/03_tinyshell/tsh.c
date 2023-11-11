@@ -1,6 +1,8 @@
 /*
  * tsh - A tiny shell program with job control
  */
+#include <asm-generic/errno-base.h>
+#include <bits/types/sigset_t.h>
 #include <ctype.h>
 #include <errno.h>
 #include <signal.h>
@@ -169,7 +171,6 @@ void eval(char *cmdline) {
 
   bg = parseline(cmdline, argv);
   if (argv[0] == NULL) {
-    // nothing entered, continue command prompt...
     return;
   }
 
@@ -183,41 +184,51 @@ void eval(char *cmdline) {
     }
   }
 
-  char *command = argv[0];
   // built-in commands:
-  // quit, jobs, bg <job> --> use pid, fg <job> --> use pid
-  if (strcmp(command, "quit") == 0) {
-    builtin_cmd(argv);
-    return;
-  } else if (strcmp(command, "jobs") == 0) {
-    builtin_cmd(argv);
-    return;
-  } else if (strcmp(command, "bg") == 0) {
-    builtin_cmd(argv);
-    return;
-  } else if (strcmp(command, "fg") == 0) {
-    builtin_cmd(argv);
+  if (builtin_cmd(argv) || bg) {
     return;
   }
 
-  // Create child process for job; this has group ID for killing,
+  //mask child signal and block until I'm done forking..
+  sigset_t mask;
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGCHLD);
+  sigprocmask(SIG_BLOCK, &mask, NULL);
+
   pid_t npid;
   if ((npid = fork()) == 0) {
     // a.) set group for itself
-    setpgrp();
+    if (setpgid(0, 0) < 0) {
+      unix_error("can't set pgid");
+    }
+
+    //im the child, don't block my ending anymore
+    sigprocmask(SIG_UNBLOCK, &mask, NULL);
 
     // b.) execute the command of the child
     if (execve(argv[0], argv, environ) < 0) {
       //failing execution.
-      printf("%s: error executing command. \n", argv[0]);
+      printf("%s: Command not found. \n", argv[0]);
       exit(0);
     }
   }
-  addjob(jobs, npid, bg ? BG : FG, cmdline);
+  
+  //child shouldn't reach here b/c of exec.
+  //this is Parent
+  if (!addjob(jobs, npid, bg ? BG : FG, cmdline)) {
+    //couldn't add b/c false result:
+    kill(-npid, SIGINT);
+    return;
+  }
+
+  //no longer blocking, finished the fork and job is good.
+  sigprocmask(SIG_UNBLOCK, &mask, NULL);
 
   // parent; if BG, continue; else wait on the pid from child
   if (!bg) {
     waitfg(npid);
+  } else {
+    printf("[%d] (%d) %s", pid2jid(npid), npid, cmdline);
   }
 
   return;
@@ -282,55 +293,52 @@ int parseline(const char *cmdline, char **argv) {
  *    it immediately.
  */
 int builtin_cmd(char **argv) {
+  //builtin shouldn't be a child job
+
   char *command = argv[0];
   if (strcmp(command, "quit") == 0) {
-    
-    // delete all children and jobs, then exit.
-    initjobs(jobs);
-    kill(-getpid(), SIGKILL);
     exit(0);
   } else if (strcmp(command, "jobs") == 0) {
-
-    pid_t jobspid;
-    if ((jobspid = fork()) == 0) {
-      listjobs(jobs);
-      exit(0);
-    }
-
-    // make shell wait on the jobs task.
-    waitfg(jobspid);
+    listjobs(jobs);
   } else if (strcmp(command, "bg") == 0 || strcmp(command, "fg") == 0) {
     do_bgfg(argv);
   } else {
     return 0;
   }
 
-  return 1; /* not a builtin command */
+  //is a builtin
+  return 1;
 }
 
 /*
  * do_bgfg - Execute the builtin bg and fg commands
  */
 void do_bgfg(char **argv) {
-
   char *command = argv[0];
-  struct job_t *job;
-
   // check if the arg is existent, if not, break out show error:
   if (argv[1] == NULL) {
-    fprintf(stderr, "err: %s - No process or job id given\n", command);
+    fprintf(stderr, "err: %s - No PID or %%JobID given\n", command);
     return;
   } 
+
+  struct job_t *job = NULL;
 
   pid_t argpid;
   if (argv[1][0] == '%') {
     //get by jobid
-    int jid = atoi(argv[1]+1);
-    job = getjobjid(jobs, jid);
+    //passing the pointer to the char after %
+    int jid = atoi(&argv[1][1]);
+    if (!(job = getjobjid(jobs, jid))) {
+      fprintf(stderr, "%s: No such job\n", argv[1]);
+      return;
+    }
   } else {
     //get by procid
     pid_t argid = atoi(argv[1]);
-    job = getjobpid(jobs, argid);
+    if (!(job = getjobjid(jobs, argid))) {
+      fprintf(stderr, "(%s): No such process id\n", argv[1]);
+      return;
+    }
   }
 
   //no such job, return
@@ -349,6 +357,7 @@ void do_bgfg(char **argv) {
   //set the job state of the resumed job
   if (strcmp(command, "bg") == 0) {
     job->state = BG;
+    printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline); 
   } else if (strcmp(command, "fg") == 0) {
     job->state = FG;
 
@@ -360,59 +369,10 @@ void do_bgfg(char **argv) {
  * waitfg - Block until process pid is no longer the foreground process
  */
 void waitfg(pid_t pid) {
-  int status;
-  while (1) {
-    //wait for a process, we will see the status
-    if (waitpid(pid, &status, WUNTRACED) == -1) {
-      // child gives us an error in the foreground... idk what to do.
-      // probably "child error", delete it then go..
-      // printf("error: pid=%d, status=%d\n", pid, status);
-      // the child terminated? remove the job and go fg
-      deletejob(jobs, pid);
-      break;
-    }
-
-    // exit, clean break. no need to do anything
-    if (WIFEXITED(status)) {
-      // printf("ExitStatus: %d\n", WEXITSTATUS(status));
-
-      deletejob(jobs, pid);
-      break;
-    }
-
-    if (WIFSIGNALED(status)) {
-      int sigused = WTERMSIG(status);
-      if (sigused == SIGSTOP || sigused == SIGTSTP) {
-        kill(pid, SIGSTOP);
-        // printf("signaled stop from child\n");
-        //stoppage to the child, label the job, etc.
-        struct job_t *job = getjobpid(jobs, pid);
-        job->state = ST;
-        printf("Job [%d] (%d) stopped by signal %d\n", job->jid, job->pid, sigused);
-        break;
-      } else if (sigused == SIGINT) {
-        //int child and its children
-        kill(-pid, SIGINT);
-        kill(pid, SIGINT);
-        struct job_t * job = getjobpid(jobs, pid);
-        printf("Job [%d] (%d) stopped by signal %d\n", job->jid, job->pid, sigused);
-        deletejob(jobs, pid);
-        break;
-      } else if (sigused == SIGCONT) {
-        // this isn't an important signal...
-        continue;
-      }
-    }
-    
-    if (WIFSTOPPED(status)) {
-      //forward signal to child, update job status, resume shell
-      kill(pid, SIGTSTP);
-      struct job_t *job = getjobpid(jobs, pid);
-      job->state = ST;
-      printf("Job [%d] (%d) stopped by signal %d\n", job->jid, job->pid, SIGTSTP);
-      break;
-    }
+  while(pid == fgpid(jobs)) {
+    //noop
   }
+
   return;
 }
 
@@ -431,12 +391,40 @@ void sigchld_handler(int sig) {
   // printf("SIGCHILD; mypid=%d, parentpid=%d, mygroup=%d\n", getpid(),
   // getppid(), getgid());
   // printf("Signal: %d\n", sig);
+  pid_t pid; 
+  int status;
+
+  //reap the children when returned, check the signals
+  //should have non-negative pid's 
+  while ((pid = waitpid(-1, &status, WUNTRACED)) > 0) {
+    // exit, clean break. no need to do anything
+    struct job_t *job = getjobpid(jobs, pid);
+
+    if (WIFSIGNALED(status)) {
+      printf("Job [%d] (%d) terminated by signal %d\n", job->jid, job->pid, WTERMSIG(status));
+    } else if (WIFSTOPPED(status)) {
+      struct job_t *job = getjobpid(jobs, pid);
+      job->state = ST;
+      printf("Job [%d] (%d) stopped by signal %d\n", job->jid, job->pid, WSTOPSIG(status));
+      return;
+    }
 
 
-  //do we arrive here from bg? if so, figure it out...
+    if (WIFEXITED(status)) {
+      // printf("ExitStatus: %d\n", WEXITSTATUS(status));
+    }
+    deletejob(jobs, pid);
+  }
+    
+  if (errno == 0) {
+    //no errors;
+    return;
+  }
 
-
-
+  // if they're interesting errors and not a forced failed child, I wanna know
+  if (errno != ECHILD) {
+    unix_error("waitpid error");
+  } 
   return;
 }
 
@@ -451,13 +439,9 @@ void sigint_handler(int sig) {
   // printf("SIGINT; mypid=%d, parentpid=%d, mygroup=%d, fgpid=%d\n", getpid(), getppid(),
   // getgid(), fgid);
 
-  if (getpid() != fgid) {
-    //I'm not the fg process, send to kill/int
-    kill(fgid, SIGKILL);
-    deletejob(jobs, fgid);
-  } else {
-    // I am the fg job, send the interrupts down
-    // kill(-getpid(), SIGINT);
+  if (fgid != 0) {
+    //send the int to children
+    kill(-fgid, SIGKILL);
   }
   return;
 }
@@ -473,15 +457,9 @@ void sigtstp_handler(int sig) {
   // printf("SIGSTOP; mypid=%d, parentpid=%d, mygroup=%d, fgpid=%d\n", getpid(),
   // getppid(), getgid(), fgid);
 
-  if (getpid() != fgid) {
-    //i'm not the foreground job, sent to stop and handle the info about that job.
-    kill(fgid, SIGSTOP);
-    struct job_t *job = getjobpid(jobs, fgid);
-    job->state = ST;
-
-  } else {
-    // I'm the foreground job (shell), send them through.
-    // kill(-getpid(), SIGTSTP);
+  // send to children if this is a valid id
+  if (fgid != 0) {
+    kill(-fgid, SIGSTOP);
   }
   return;
 }
