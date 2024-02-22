@@ -25,6 +25,10 @@ typedef struct cache_block {
 
 } cache_block_t;
 
+//doing this to have a global variable to reference with functions below:
+int sets;
+int associativity;
+
 typedef struct cache {
   unsigned int associativity;      // Associativity, depth of lines.
   unsigned int sets_size;          // sets, indexes of lines
@@ -34,10 +38,6 @@ typedef struct cache {
   unsigned int associativity_bits; // offset of block width, from associativity
                                    // associativity.
   unsigned int tag_width; // bits for the tag, taking a subset of the 64bit.
-
-  // blocks will be indexed by set and associativity like [i][j]...
-  cache_block_t **blocks;
-
 } cache_t;
 
 typedef struct perf_tracker {
@@ -55,7 +55,7 @@ typedef struct hit_info {
   uint64_t e_line;
 } hit_info_t;
 
-cache_t *create_cache_struct(const unsigned int associativity,
+cache_t * calculate_cache_stats(const unsigned int associativity,
                              const unsigned int set_bits,
                              const unsigned int block_bits) {
 
@@ -76,35 +76,8 @@ cache_t *create_cache_struct(const unsigned int associativity,
   theCache->associativity_bits = associativity_bits;
   theCache->tag_width = 64 - associativity_bits - block_bits - set_bits;
 
-  // assigning pointer to pointers of cache blocks... the pointer is "a set",
-  // the internal would be "the associative part of the set"
-  theCache->blocks = malloc(theCache->sets_size * sizeof(cache_block_t *));
-
-  // block bit is column, associativity bit is row... within sets.
-  // malloc doesn't make all the blocks "0'd" guarantee, so we do that.
-  for (int i = 0; i < theCache->sets_size; i++) {
-
-    // this set, assign a count of blocks equal to associativity.
-    cache_block_t *blocks_in_set =
-        malloc(theCache->associativity * sizeof(cache_block_t));
-    
-    for (int j = 0; j < associativity; j++) {
-      blocks_in_set[j].dirty = 0;
-      blocks_in_set[j].valid = 0;
-      blocks_in_set[j].tag = 0;
-    }
-
-    theCache->blocks[i] = blocks_in_set;
-
-  }
 
   return theCache;
-}
-
-void free_cache(cache_t *cache) {
-  // might need to loop for blocks, but it's currently calloc'd.
-  free(cache->blocks);
-  free(cache);
 }
 
 // tag bits are "the rest of the address offset that can't see the block"
@@ -120,7 +93,7 @@ uint64_t parse_tag_from_addr(cache_t *cache, uint64_t addr) {
 /**
  * cache has the tag width, use that and mask the addr to compare block tag.
  * */
-hit_info_t search_hit_index(cache_t *cache, uint64_t addr, _Bool verbose) {
+hit_info_t search_hit_index(cache_t *cache, cache_block_t blocks[sets][associativity], uint64_t addr, _Bool verbose) {
 
   uint64_t tag = parse_tag_from_addr(cache, addr);
   // using the set bits from addr to locate line in cache.
@@ -151,8 +124,7 @@ hit_info_t search_hit_index(cache_t *cache, uint64_t addr, _Bool verbose) {
   // for the given set, check the tag match.
 
 
-  cache_block_t* theSet = cache->blocks[set];
-  cache_block_t theBlock = theSet[assoc];
+  cache_block_t theBlock = blocks[set][assoc];
 
   hit_info_t theHit;
   theHit.valid_hit = 0;
@@ -168,7 +140,7 @@ hit_info_t search_hit_index(cache_t *cache, uint64_t addr, _Bool verbose) {
 
 // if miss, find open spot and put thing in there.
 int perform_miss(cache_t *cache, perf_t *performance, uint64_t addr,
-                 char theOp) {
+                 char theOp, cache_block_t blocks[sets][associativity]) {
   // add to miss count
   performance->miss_count++;
 
@@ -183,7 +155,7 @@ int perform_miss(cache_t *cache, perf_t *performance, uint64_t addr,
   for (int i = 0; i < cache->sets_size; i++) {
     unsigned int set_idx = i;
 
-    cache_block_t* theSet = cache->blocks[set_idx];
+    cache_block_t* theSet = blocks[set_idx];
     for (int j = 0; j < cache->associativity; j++) {
 
       cache_block_t theBlock = theSet[j];
@@ -214,9 +186,8 @@ int perform_miss(cache_t *cache, perf_t *performance, uint64_t addr,
     performance->eviction_count++;
   }
 
-  cache_block_t * theSet = cache->blocks[idx_to_replace];
   for (int j = 0; j < cache->associativity; j++) {
-    cache_block_t theBlock = theSet[j];
+    cache_block_t theBlock = blocks[idx_to_replace][j];
 
     theBlock.lru_track = performance->access_count;
     theBlock.valid = 1;
@@ -235,7 +206,7 @@ int perform_miss(cache_t *cache, perf_t *performance, uint64_t addr,
       performance->hit_count++;
     }
 
-    cache->blocks[idx_to_replace][j] = theBlock;
+    blocks[idx_to_replace][j] = theBlock;
   }
 
   return idx_to_replace;
@@ -294,17 +265,34 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  // put the blocks into a larger object.
-  cache_t *myCache = create_cache_struct(associativity, set_bits, block_bits);
-
-  if (myCache == NULL) {
-    printf("Error creating cache");
+  cache_t *cacheStats = calculate_cache_stats(associativity, set_bits, block_bits);
+  if (cacheStats == NULL) {
+    printf("Error creating cache data");
     return 1;
   }
 
+  sets = cacheStats->sets_size;
+  associativity = cacheStats->associativity;
+
+  //create the blocks array with set and associativity.
+  // assigning pointer to pointers of cache blocks... the pointer is "a set",
+  // the internal would be "the associative part of the set"
+  cache_block_t blocks[cacheStats->sets_size][cacheStats->associativity];
+
+  // block bit is column, associativity bit is row... within sets.
+  // malloc doesn't make all the blocks "0'd" guarantee, so we do that.
+  for (int i = 0; i < cacheStats->sets_size; i++) {
+    for (int j = 0; j < associativity; j++) {
+      blocks[i][j].dirty = 0;
+      blocks[i][j].valid = 0;
+      blocks[i][j].tag = 0;
+    }
+  }
+
+
   if (verbose) {
-    printf("Using myCache with S=%d, associativity=%d, B=%d, on trace_file=%s\n",
-           myCache->sets_size, associativity, myCache->block_size, trace_file);
+    printf("Using cacheStats with S=%d, associativity=%d, B=%d, on trace_file=%s\n",
+           cacheStats->sets_size, associativity, cacheStats->block_size, trace_file);
   }
 
   perf_t *performance = malloc(sizeof(perf_t));
@@ -345,7 +333,7 @@ int main(int argc, char *argv[]) {
 
       // cache operation. S = store, L = Load, M = Modify (Load then store)
       // check for hit, if hit then increment.
-      hit_info_t hit_check = search_hit_index(myCache, addr, verbose);
+      hit_info_t hit_check = search_hit_index(cacheStats, blocks, addr, verbose);
       printf("hit?=%d, set=%ld, e=%ld, block=%ld\n", hit_check.valid_hit,
              hit_check.set, hit_check.e_line, hit_check.block);
 
@@ -356,7 +344,7 @@ int main(int argc, char *argv[]) {
         uint64_t e_line = hit_check.e_line;
 
         // block to touch is dependent on set and associativity.
-        cache_block_t* theSet = myCache->blocks[set];
+        cache_block_t* theSet = blocks[set];
         cache_block_t theBlock = theSet[e_line];
 
         // if store or modify, dirty. if loading, clean.
@@ -376,11 +364,11 @@ int main(int argc, char *argv[]) {
         performance->access_count++;
 
         //set the block back after modifying.
-        myCache->blocks[set][e_line] = theBlock;
+        blocks[set][e_line] = theBlock;
       } else {
         // this is miss, perform miss operation.
         // miss would look for open space, and if not evict the LRU.
-        perform_miss(myCache, performance, addr, theOp);
+        perform_miss(cacheStats, performance, addr, theOp, blocks);
       }
     }
 
@@ -390,7 +378,7 @@ int main(int argc, char *argv[]) {
 
   //finish parsing the trace file, close and show results.
   fclose(fp);
-  free_cache(myCache);
+  free(cacheStats);
 
   printSummary(performance->hit_count, performance->miss_count,
                performance->eviction_count);
