@@ -241,16 +241,86 @@ int perform_miss(cache_t *cache, perf_t *performance, uint64_t addr,
   return idx_to_replace;
 }
 
-void load_trace_with_cache(char *tracefile, cache_t *myCache,
-                           perf_t *performance, _Bool verbose) {
+void print_usage(char *argv[]) {
+  printf("Usage: %s [-hv] -s <num> -associativity <num> -b <num> -t <file>\n",
+         argv[0]);
+  printf("Options:\n");
+  printf("  -h         Print this help message.\n");
+  printf("  -v         Optional verbose flag.\n");
+  printf("  -s <num>   Number of set index bits.\n");
+  printf("  -associativity <num>   Number of lines per set.\n");
+  printf("  -b <num>   Number of block offset bits.\n");
+  printf("  -t <file>  Trace file.\n");
+  exit(0);
+}
 
+int main(int argc, char *argv[]) {
+  char c;
+  _Bool verbose = 0;
+  int set_bits, associativity, block_bits;
+  char *trace_file;
+
+  // getopt does parsing for values if "[char]:", no value if "[char]"
+  while ((c = getopt(argc, argv, "hvs:E:b:t:")) != -1) {
+    switch (c) {
+    case 'h':
+      print_usage(argv);
+      return 0;
+    case 'v':
+      verbose = 1;
+      break;
+    case 's':
+      set_bits = atoi(optarg);
+      break;
+    case 'E':
+      associativity = atoi(optarg);
+      break;
+    case 'b':
+      block_bits = atoi(optarg);
+      break;
+    case 't':
+      trace_file = optarg;
+      break;
+    default:
+      print_usage(argv);
+      exit(1);
+    }
+  }
+
+  if (set_bits <= 0 || associativity <= 0 || block_bits <= 0 ||
+      trace_file == NULL) {
+    printf("%s: Missing required command line argument\n", argv[0]);
+    print_usage(argv);
+    exit(1);
+  }
+
+  // put the blocks into a larger object.
+  cache_t *myCache = create_cache_struct(associativity, set_bits, block_bits);
+
+  if (myCache == NULL) {
+    printf("Error creating cache");
+    return 1;
+  }
+
+  if (verbose) {
+    printf("Using myCache with S=%d, associativity=%d, B=%d, on trace_file=%s\n",
+           myCache->sets_size, associativity, myCache->block_size, trace_file);
+  }
+
+  perf_t *performance = malloc(sizeof(perf_t));
+  performance->hit_count = 0;
+  performance->miss_count = 0;
+  performance->eviction_count = 0;
+  performance->access_count = 0;
+
+  //Start parsing the trace file
   char buf[1000];
   uint64_t addr = 0;
   unsigned int len = 0;
-  FILE *fp = fopen(tracefile, "r");
+  FILE *fp = fopen(trace_file, "r");
 
   if (!fp) {
-    fprintf(stderr, "%s: %s\n", tracefile, strerror(errno));
+    fprintf(stderr, "%s: %s\n", trace_file, strerror(errno));
     exit(1);
   }
 
@@ -318,83 +388,8 @@ void load_trace_with_cache(char *tracefile, cache_t *myCache,
     lineRead = fgets(buf, 1000, fp);
   }
 
+  //finish parsing the trace file, close and show results.
   fclose(fp);
-}
-
-void print_usage(char *argv[]) {
-  printf("Usage: %s [-hv] -s <num> -associativity <num> -b <num> -t <file>\n",
-         argv[0]);
-  printf("Options:\n");
-  printf("  -h         Print this help message.\n");
-  printf("  -v         Optional verbose flag.\n");
-  printf("  -s <num>   Number of set index bits.\n");
-  printf("  -associativity <num>   Number of lines per set.\n");
-  printf("  -b <num>   Number of block offset bits.\n");
-  printf("  -t <file>  Trace file.\n");
-  exit(0);
-}
-
-int main(int argc, char *argv[]) {
-  char c;
-  _Bool verbose = 0;
-  int set_bits, associativity, block_bits;
-  char *trace_file;
-
-  // getopt does parsing for values if "[char]:", no value if "[char]"
-  while ((c = getopt(argc, argv, "hvs:E:b:t:")) != -1) {
-    switch (c) {
-    case 'h':
-      print_usage(argv);
-      return 0;
-    case 'v':
-      verbose = 1;
-      break;
-    case 's':
-      set_bits = atoi(optarg);
-      break;
-    case 'E':
-      associativity = atoi(optarg);
-      break;
-    case 'b':
-      block_bits = atoi(optarg);
-      break;
-    case 't':
-      trace_file = optarg;
-      break;
-    default:
-      print_usage(argv);
-      exit(1);
-    }
-  }
-
-  if (set_bits <= 0 || associativity <= 0 || block_bits <= 0 ||
-      trace_file == NULL) {
-    printf("%s: Missing required command line argument\n", argv[0]);
-    print_usage(argv);
-    exit(1);
-  }
-
-  // put the blocks into a larger object.
-  cache_t *myCache = create_cache_struct(associativity, set_bits, block_bits);
-
-  if (myCache == NULL) {
-    printf("Error creating cache");
-    return 1;
-  }
-
-  if (verbose) {
-    printf("Using myCache with S=%d, associativity=%d, B=%d, on tracefile=%s\n",
-           myCache->sets_size, associativity, myCache->block_size, trace_file);
-  }
-
-  perf_t *performance = malloc(sizeof(perf_t));
-  performance->hit_count = 0;
-  performance->miss_count = 0;
-  performance->eviction_count = 0;
-  performance->access_count = 0;
-
-  load_trace_with_cache(trace_file, myCache, performance, verbose);
-
   free_cache(myCache);
 
   printSummary(performance->hit_count, performance->miss_count,
