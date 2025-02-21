@@ -190,17 +190,21 @@ void eval(char *cmdline) {
   sigset_t mask;
   sigemptyset(&mask);
   sigaddset(&mask, SIGCHLD);
+  sigaddset(&mask, SIGINT);
+  sigaddset(&mask, SIGSTOP);
   sigprocmask(SIG_BLOCK, &mask, NULL);
 
+  // child task based on command that's not built-in
   pid_t npid;
   if ((npid = fork()) == 0) {
+    // im the child:
+    // unblock from parent perspective
+    sigprocmask(SIG_UNBLOCK, &mask, NULL);
+
     // a.) set group for itself
     if (setpgid(0, 0) < 0) {
       unix_error("can't set pgid");
     }
-
-    // im the child, don't block my ending anymore
-    sigprocmask(SIG_UNBLOCK, &mask, NULL);
 
     // b.) execute the command of the child
     if (execve(argv[0], argv, environ) < 0) {
@@ -210,22 +214,19 @@ void eval(char *cmdline) {
     }
   }
 
-  // child shouldn't reach here b/c of exec.
-  // this is Parent
-  if (!addjob(jobs, npid, bg ? BG : FG, cmdline)) {
-    // couldn't add b/c false result:
-    kill(-npid, SIGINT);
-    return;
-  }
+  // child doesn't reach here b/c exit or exec
+  //  this is Parent, add job and unblock
 
   // no longer blocking, finished the fork and job is good.
   sigprocmask(SIG_UNBLOCK, &mask, NULL);
 
   // parent; if BG, continue; else wait on the pid from child
-  if (!bg) {
-    waitfg(npid);
-  } else {
+  if (bg) {
+    addjob(jobs, npid, BG, cmdline);
     printf("[%d] (%d) %s", pid2jid(npid), npid, cmdline);
+  } else {
+    addjob(jobs, npid, FG, cmdline);
+    waitfg(npid);
   }
 
   return;
@@ -290,20 +291,24 @@ int parseline(const char *cmdline, char **argv) {
  *    it immediately.
  */
 int builtin_cmd(char **argv) {
+  // adding commands in future is better to keep as guard clauses per command
 
   char *command = argv[0];
   if (strcmp(command, "quit") == 0) {
     exit(0);
-  } else if (strcmp(command, "jobs") == 0) {
-    listjobs(jobs);
-  } else if (strcmp(command, "bg") == 0 || strcmp(command, "fg") == 0) {
-    do_bgfg(argv);
-  } else {
-    return 0;
   }
 
-  // is a builtin
-  return 1;
+  if (strcmp(command, "jobs") == 0) {
+    listjobs(jobs);
+    return 1;
+  }
+
+  if (strcmp(command, "bg") == 0 || strcmp(command, "fg") == 0) {
+    do_bgfg(argv);
+    return 1;
+  }
+
+  return 0;
 }
 
 /*
@@ -317,35 +322,36 @@ void do_bgfg(char **argv) {
     return;
   }
 
+  // bg/fg need job: parse argv1 for job or pid depending on %number or number
   struct job_t *job = NULL;
-
-  // parse argv1 for job or pid depending on %number or number
-  if (argv[1][0] == '%') {
-    int jid = atoi(&argv[1][1]);
-    job = getjobjid(jobs, jid);
-    if (job == NULL) {
-      fprintf(stderr, "%s: No such job\n", argv[0]);
-      return;
-    }
-  } else if (isdigit(argv[1][0])) {
+  if (isdigit(argv[1][0])) {
     pid_t argid = atoi(argv[1]);
     job = getjobpid(jobs, argid);
     if (job == NULL) {
-      fprintf(stderr, "%s: No such process\n", argv[0]);
+      fprintf(stderr, "%s: No such process\n", argv[1]);
+      return;
+    }
+  } else if (argv[1][0] == '%' && isdigit(argv[1][1])) {
+    // parse with atoi, give the pointer for string parse intead of the char
+    int jid = atoi(&argv[1][1]);
+    job = getjobjid(jobs, jid);
+    if (job == NULL) {
+      fprintf(stderr, "%s: No such job\n", argv[1]);
       return;
     }
   } else {
-      fprintf(stderr, "%s: argument must be PID or %%jobid\n", argv[0]);
-      return;
+    fprintf(stderr, "%s: argument must be PID or %%jobid\n", argv[0]);
+    return;
   }
 
   // here I need to have a job b/c of above if/else
   pid_t argpid = job->pid;
 
-  // resume the job and children
+  // resume children in group of parent
   if (kill(-(job->pid), SIGCONT) < 0) {
     printf("couldn't restart job");
   }
+  // resume parent
   if (kill(job->pid, SIGCONT) < 0) {
     printf("error restarting job");
   }
@@ -365,8 +371,10 @@ void do_bgfg(char **argv) {
  * waitfg - Block until process pid is no longer the foreground process
  */
 void waitfg(pid_t pid) {
+
   while (pid == fgpid(jobs)) {
-    // noop
+    // noop? looping eval of while comparison is bad, sleep is probably better
+    ;
   }
 
   return;
@@ -395,21 +403,27 @@ void sigchld_handler(int sig) {
   while ((pid = waitpid(-1, &status, WUNTRACED | WNOHANG)) > 0) {
     struct job_t *job = getjobpid(jobs, pid);
 
-    // handle the signals of the returned process
-    if (WIFSIGNALED(status)) {
-
-      //any signal that terminated the child, print and continue reaping
-      printf("Job [%d] (%d) terminated by signal %d\n", pid2jid(pid), pid, WTERMSIG(status));
-    } else if (WIFSTOPPED(status)) {
-
-      //if a child stops, update its state and return rather than reap
-      printf("Job [%d] (%d) stopped by signal %d\n", pid2jid(pid), pid, WSTOPSIG(status));
-      job->state = ST;
+    if (job == NULL) {
+      printf("WHERE IS MY CHILD?!?! (%d)\n", pid);
       return;
     }
 
-    //reaching here, not a stopped job. Therefore, delete from job list
-    deletejob(jobs, pid);
+    // handle the signals of the returned process
+    if (WIFSTOPPED(status)) {
+
+      // if a child stops, update its state and return rather than reap
+      printf("Job [%d] (%d) stopped by signal %d\n", job->jid, job->pid,
+             WSTOPSIG(status));
+      job->state = ST;
+    } else if (WIFSIGNALED(status)) {
+      deletejob(jobs, job->pid);
+
+      // any signal that terminated the child, print and continue reaping
+      printf("Job [%d] (%d) terminated by signal %d\n", job->jid, job->pid,
+             WTERMSIG(status));
+    } else if (WIFEXITED(status)) {
+      deletejob(jobs, job->pid);
+    }
   }
 
   // error if non-zero (also not b/c of child), we want to know
@@ -441,7 +455,7 @@ void sigtstp_handler(int sig) {
   pid_t fgid = fgpid(jobs);
 
   if (fgid != 0) {
-    //passthrough sigstp
+    // passthrough sigstp
     kill(-fgid, SIGTSTP);
   }
   return;
